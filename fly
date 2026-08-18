@@ -1,0 +1,823 @@
+--[[
+    Sistema de Voo Premium - Estilo Ikat Loader
+    Interface moderna com animações suaves e design elegante
+]]
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+
+local player = Players.LocalPlayer
+local character = player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local rootPart = character:WaitForChild("HumanoidRootPart")
+
+-- ============================================
+-- CONFIGURAÇÕES DO SISTEMA
+-- ============================================
+
+local config = {
+    FlightSpeed = 50,
+    MinSpeed = 10,
+    MaxSpeed = 150,
+    SpeedIncrement = 5,
+    isFlying = false,
+    isMinimized = false
+}
+
+-- ============================================
+-- VARIÁVEIS DE CONTROLE
+-- ============================================
+
+local keys = {
+    W = false,
+    A = false,
+    S = false,
+    D = false,
+    Space = false,
+    Shift = false
+}
+
+local flyConnection = nil
+local bodyVelocity = nil
+
+-- ============================================
+-- CRIAÇÃO DA INTERFACE (ESTILO IKAT)
+-- ============================================
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "FlightUI"
+screenGui.Parent = player.PlayerGui
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+-- ============================================
+-- FUNÇÕES DE ESTILO IKAT
+-- ============================================
+
+local function createBlurEffect()
+    local blur = Instance.new("BlurEffect")
+    blur.Size = 0
+    blur.Parent = Lighting
+    return blur
+end
+
+local blurEffect = createBlurEffect()
+
+-- Efeito de vidro (Glassmorphism)
+local function applyGlassStyle(frame)
+    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+    frame.BackgroundTransparency = 0.15
+    frame.BorderSizePixel = 0
+    frame.ClipsDescendants = true
+end
+
+-- ============================================
+-- CONTAINER PRINCIPAL
+-- ============================================
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 380, 0, 500)
+mainFrame.Position = UDim2.new(0.5, -190, 0.5, -250)
+mainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 25)
+mainFrame.BackgroundTransparency = 0.25
+mainFrame.BorderSizePixel = 0
+mainFrame.ClipsDescendants = true
+mainFrame.Parent = screenGui
+
+-- Borda com gradiente
+local borderGradient = Instance.new("Frame")
+borderGradient.Name = "BorderGradient"
+borderGradient.Size = UDim2.new(1, 0, 1, 0)
+borderGradient.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+borderGradient.BackgroundTransparency = 1
+borderGradient.Parent = mainFrame
+
+local borderGradientInstance = Instance.new("UIGradient")
+borderGradientInstance.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(100, 50, 255)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(50, 100, 255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 50, 255))
+})
+borderGradientInstance.Parent = borderGradient
+
+local borderCorner = Instance.new("UICorner")
+borderCorner.CornerRadius = UDim.new(0, 20)
+borderCorner.Parent = mainFrame
+
+-- Sombra principal
+local shadow = Instance.new("ImageLabel")
+shadow.Name = "Shadow"
+shadow.Size = UDim2.new(1, 40, 1, 40)
+shadow.Position = UDim2.new(0, -20, 0, -20)
+shadow.BackgroundTransparency = 1
+shadow.Image = "rbxassetid://1316043182"
+shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
+shadow.ImageTransparency = 0.6
+shadow.ScaleType = Enum.ScaleType.Slice
+shadow.SliceCenter = Rect.new(10, 10, 10, 10)
+shadow.Parent = mainFrame
+
+-- ============================================
+-- HEADER (BARRA DE TÍTULO)
+-- ============================================
+
+local header = Instance.new("Frame")
+header.Name = "Header"
+header.Size = UDim2.new(1, 0, 0, 60)
+header.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
+header.BackgroundTransparency = 0.4
+header.BorderSizePixel = 0
+header.Parent = mainFrame
+
+local headerCorner = Instance.new("UICorner")
+headerCorner.CornerRadius = UDim.new(0, 20)
+headerCorner.Parent = header
+
+-- Ícone do header
+local headerIcon = Instance.new("ImageLabel")
+headerIcon.Name = "HeaderIcon"
+headerIcon.Size = UDim2.new(0, 30, 0, 30)
+headerIcon.Position = UDim2.new(0, 15, 0.5, -15)
+headerIcon.BackgroundTransparency = 1
+headerIcon.Image = "rbxassetid://5076896571"
+headerIcon.ImageColor3 = Color3.fromRGB(150, 100, 255)
+headerIcon.Parent = header
+
+-- Título
+local title = Instance.new("TextLabel")
+title.Name = "Title"
+title.Size = UDim2.new(0.6, 0, 1, 0)
+title.Position = UDim2.new(0, 55, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = "✈️ Flight System"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 22
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Font = Enum.Font.GothamBold
+title.Parent = header
+
+-- Subtítulo
+local subtitle = Instance.new("TextLabel")
+subtitle.Name = "Subtitle"
+subtitle.Size = UDim2.new(0.6, 0, 0.5, 0)
+subtitle.Position = UDim2.new(0, 55, 0.5, 0)
+subtitle.BackgroundTransparency = 1
+subtitle.Text = "Premium Flight Controller"
+subtitle.TextColor3 = Color3.fromRGB(150, 150, 200)
+subtitle.TextSize = 12
+subtitle.TextXAlignment = Enum.TextXAlignment.Left
+subtitle.Font = Enum.Font.Gotham
+subtitle.Parent = header
+
+-- Botão minimizar
+local minimizeBtn = Instance.new("ImageButton")
+minimizeBtn.Name = "MinimizeBtn"
+minimizeBtn.Size = UDim2.new(0, 35, 0, 35)
+minimizeBtn.Position = UDim2.new(1, -95, 0, 12)
+minimizeBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+minimizeBtn.BackgroundTransparency = 0.3
+minimizeBtn.Image = "rbxassetid://5076896579"
+minimizeBtn.ImageColor3 = Color3.fromRGB(200, 200, 255)
+minimizeBtn.Parent = header
+
+local minimizeCorner = Instance.new("UICorner")
+minimizeCorner.CornerRadius = UDim.new(1, 0)
+minimizeCorner.Parent = minimizeBtn
+
+-- Botão fechar
+local closeBtn = Instance.new("ImageButton")
+closeBtn.Name = "CloseBtn"
+closeBtn.Size = UDim2.new(0, 35, 0, 35)
+closeBtn.Position = UDim2.new(1, -50, 0, 12)
+closeBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+closeBtn.BackgroundTransparency = 0.3
+closeBtn.Image = "rbxassetid://5076896575"
+closeBtn.ImageColor3 = Color3.fromRGB(255, 100, 100)
+closeBtn.Parent = header
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(1, 0)
+closeCorner.Parent = closeBtn
+
+-- ============================================
+-- CONTEÚDO PRINCIPAL
+-- ============================================
+
+local content = Instance.new("Frame")
+content.Name = "Content"
+content.Size = UDim2.new(1, 0, 1, -60)
+content.Position = UDim2.new(0, 0, 0, 60)
+content.BackgroundTransparency = 1
+content.Parent = mainFrame
+
+-- ============================================
+-- STATUS DO VOO
+-- ============================================
+
+local statusContainer = Instance.new("Frame")
+statusContainer.Name = "StatusContainer"
+statusContainer.Size = UDim2.new(0.9, 0, 0, 70)
+statusContainer.Position = UDim2.new(0.05, 0, 0.03, 0)
+statusContainer.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+statusContainer.BackgroundTransparency = 0.08
+statusContainer.BorderSizePixel = 0
+statusContainer.ClipsDescendants = true
+statusContainer.Parent = content
+
+local statusCorner = Instance.new("UICorner")
+statusCorner.CornerRadius = UDim.new(0, 14)
+statusCorner.Parent = statusContainer
+
+-- Efeito de brilho no status
+local statusGlow = Instance.new("Frame")
+statusGlow.Name = "StatusGlow"
+statusGlow.Size = UDim2.new(0.8, 0, 0.8, 0)
+statusGlow.Position = UDim2.new(0.1, 0, 0.1, 0)
+statusGlow.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+statusGlow.BackgroundTransparency = 0.8
+statusGlow.BorderSizePixel = 0
+statusGlow.Parent = statusContainer
+
+local glowCorner = Instance.new("UICorner")
+glowCorner.CornerRadius = UDim.new(1, 0)
+glowCorner.Parent = statusGlow
+
+-- Indicador de status (círculo animado)
+local statusIndicator = Instance.new("Frame")
+statusIndicator.Name = "StatusIndicator"
+statusIndicator.Size = UDim2.new(0, 18, 0, 18)
+statusIndicator.Position = UDim2.new(0, 20, 0.5, -9)
+statusIndicator.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+statusIndicator.BackgroundTransparency = 0.2
+statusIndicator.BorderSizePixel = 0
+statusIndicator.ClipsDescendants = true
+statusIndicator.Parent = statusContainer
+
+local indicatorCorner = Instance.new("UICorner")
+indicatorCorner.CornerRadius = UDim.new(1, 0)
+indicatorCorner.Parent = statusIndicator
+
+-- Pulso do indicador
+local pulse = Instance.new("Frame")
+pulse.Name = "Pulse"
+pulse.Size = UDim2.new(1, 10, 1, 10)
+pulse.Position = UDim2.new(0, -5, 0, -5)
+pulse.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+pulse.BackgroundTransparency = 0.7
+pulse.BorderSizePixel = 0
+pulse.ClipsDescendants = true
+pulse.Parent = statusIndicator
+
+local pulseCorner = Instance.new("UICorner")
+pulseCorner.CornerRadius = UDim.new(1, 0)
+pulseCorner.Parent = pulse
+
+-- Texto de status
+local statusText = Instance.new("TextLabel")
+statusText.Name = "StatusText"
+statusText.Size = UDim2.new(0.7, 0, 1, 0)
+statusText.Position = UDim2.new(0, 50, 0, 0)
+statusText.BackgroundTransparency = 1
+statusText.Text = "VOO DESATIVADO"
+statusText.TextColor3 = Color3.fromRGB(200, 200, 220)
+statusText.TextSize = 18
+statusText.TextXAlignment = Enum.TextXAlignment.Left
+statusText.Font = Enum.Font.GothamBold
+statusText.Parent = statusContainer
+
+-- Status secundário
+local statusSub = Instance.new("TextLabel")
+statusSub.Name = "StatusSub"
+statusSub.Size = UDim2.new(0.7, 0, 0.5, 0)
+statusSub.Position = UDim2.new(0, 50, 0.5, 0)
+statusSub.BackgroundTransparency = 1
+statusSub.Text = "Pressione o botão para ativar"
+statusSub.TextColor3 = Color3.fromRGB(150, 150, 180)
+statusSub.TextSize = 12
+statusSub.TextXAlignment = Enum.TextXAlignment.Left
+statusSub.Font = Enum.Font.Gotham
+statusSub.Parent = statusContainer
+
+-- ============================================
+-- BOTÃO TOGGLE DO VOO
+-- ============================================
+
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Name = "ToggleBtn"
+toggleBtn.Size = UDim2.new(0.9, 0, 0, 55)
+toggleBtn.Position = UDim2.new(0.05, 0, 0.2, 0)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(80, 50, 200)
+toggleBtn.BackgroundTransparency = 0.15
+toggleBtn.BorderSizePixel = 0
+toggleBtn.Text = "🚀 ATIVAR VOO"
+toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleBtn.TextSize = 20
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.ClipsDescendants = true
+toggleBtn.Parent = content
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(0, 14)
+toggleCorner.Parent = toggleBtn
+
+-- Efeito de hover do botão
+local toggleHover = Instance.new("Frame")
+toggleHover.Name = "Hover"
+toggleHover.Size = UDim2.new(1, 0, 1, 0)
+toggleHover.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+toggleHover.BackgroundTransparency = 0.9
+toggleHover.BorderSizePixel = 0
+toggleHover.Visible = false
+toggleHover.Parent = toggleBtn
+
+local hoverCorner = Instance.new("UICorner")
+hoverCorner.CornerRadius = UDim.new(0, 14)
+hoverCorner.Parent = toggleHover
+
+-- ============================================
+-- CONTROLE DE VELOCIDADE
+-- ============================================
+
+local speedContainer = Instance.new("Frame")
+speedContainer.Name = "SpeedContainer"
+speedContainer.Size = UDim2.new(0.9, 0, 0, 120)
+speedContainer.Position = UDim2.new(0.05, 0, 0.35, 0)
+speedContainer.BackgroundTransparency = 1
+speedContainer.Parent = content
+
+-- Label da velocidade
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Name = "SpeedLabel"
+speedLabel.Size = UDim2.new(1, 0, 0, 30)
+speedLabel.Position = UDim2.new(0, 0, 0, 0)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "⚡ Velocidade: 50"
+speedLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
+speedLabel.TextSize = 17
+speedLabel.Font = Enum.Font.GothamBold
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.Parent = speedContainer
+
+-- Container do slider
+local sliderContainer = Instance.new("Frame")
+sliderContainer.Name = "SliderContainer"
+sliderContainer.Size = UDim2.new(1, 0, 0, 45)
+sliderContainer.Position = UDim2.new(0, 0, 0, 35)
+sliderContainer.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+sliderContainer.BackgroundTransparency = 0.1
+sliderContainer.BorderSizePixel = 0
+sliderContainer.ClipsDescendants = true
+sliderContainer.Parent = speedContainer
+
+local sliderCorner = Instance.new("UICorner")
+sliderCorner.CornerRadius = UDim.new(1, 0)
+sliderCorner.Parent = sliderContainer
+
+-- Track do slider
+local sliderTrack = Instance.new("Frame")
+sliderTrack.Name = "SliderTrack"
+sliderTrack.Size = UDim2.new(0.95, 0, 0.25, 0)
+sliderTrack.Position = UDim2.new(0.025, 0, 0.5, -3)
+sliderTrack.BackgroundColor3 = Color3.fromRGB(80, 80, 120)
+sliderTrack.BackgroundTransparency = 0.4
+sliderTrack.BorderSizePixel = 0
+sliderTrack.ClipsDescendants = true
+sliderTrack.Parent = sliderContainer
+
+local trackCorner = Instance.new("UICorner")
+trackCorner.CornerRadius = UDim.new(1, 0)
+trackCorner.Parent = sliderTrack
+
+-- Fill do slider
+local sliderFill = Instance.new("Frame")
+sliderFill.Name = "SliderFill"
+sliderFill.Size = UDim2.new(0.5, 0, 1, 0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(120, 80, 255)
+sliderFill.BackgroundTransparency = 0.1
+sliderFill.BorderSizePixel = 0
+sliderFill.ClipsDescendants = true
+sliderFill.Parent = sliderTrack
+
+local fillCorner = Instance.new("UICorner")
+fillCorner.CornerRadius = UDim.new(1, 0)
+fillCorner.Parent = sliderFill
+
+-- Gradiente do fill
+local fillGradient = Instance.new("UIGradient")
+fillGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(100, 50, 255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(50, 100, 255))
+})
+fillGradient.Parent = sliderFill
+
+-- Botão do slider
+local sliderBtn = Instance.new("ImageButton")
+sliderBtn.Name = "SliderBtn"
+sliderBtn.Size = UDim2.new(0, 24, 0, 24)
+sliderBtn.Position = UDim2.new(0.5, -12, 0.5, -12)
+sliderBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+sliderBtn.BackgroundTransparency = 0.2
+sliderBtn.Image = "rbxassetid://5076896573"
+sliderBtn.ImageColor3 = Color3.fromRGB(200, 200, 255)
+sliderBtn.Parent = sliderContainer
+
+local btnCorner = Instance.new("UICorner")
+btnCorner.CornerRadius = UDim.new(1, 0)
+btnCorner.Parent = sliderBtn
+
+-- Valores mínimo e máximo
+local minLabel = Instance.new("TextLabel")
+minLabel.Name = "MinLabel"
+minLabel.Size = UDim2.new(0, 30, 0, 20)
+minLabel.Position = UDim2.new(0, 0, 0, 85)
+minLabel.BackgroundTransparency = 1
+minLabel.Text = tostring(config.MinSpeed)
+minLabel.TextColor3 = Color3.fromRGB(150, 150, 200)
+minLabel.TextSize = 13
+minLabel.Font = Enum.Font.Gotham
+minLabel.Parent = speedContainer
+
+local maxLabel = Instance.new("TextLabel")
+maxLabel.Name = "MaxLabel"
+maxLabel.Size = UDim2.new(0, 30, 0, 20)
+maxLabel.Position = UDim2.new(1, -30, 0, 85)
+maxLabel.BackgroundTransparency = 1
+maxLabel.Text = tostring(config.MaxSpeed)
+maxLabel.TextColor3 = Color3.fromRGB(150, 150, 200)
+maxLabel.TextSize = 13
+maxLabel.Font = Enum.Font.Gotham
+maxLabel.Parent = speedContainer
+
+-- ============================================
+-- CONTROLES RÁPIDOS
+-- ============================================
+
+local controlsContainer = Instance.new("Frame")
+controlsContainer.Name = "ControlsContainer"
+controlsContainer.Size = UDim2.new(0.9, 0, 0, 50)
+controlsContainer.Position = UDim2.new(0.05, 0, 0.7, 0)
+controlsContainer.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+controlsContainer.BackgroundTransparency = 0.05
+controlsContainer.BorderSizePixel = 0
+controlsContainer.ClipsDescriptors = true
+controlsContainer.Parent = content
+
+local controlsCorner = Instance.new("UICorner")
+controlsCorner.CornerRadius = UDim.new(0, 12)
+controlsCorner.Parent = controlsContainer
+
+-- Ícones de controle
+local controls = {
+    {Key = "W", Label = "↑"},
+    {Key = "A", Label = "←"},
+    {Key = "S", Label = "↓"},
+    {Key = "D", Label = "→"},
+    {Key = "Space", Label = "⬆"},
+    {Key = "Shift", Label = "⬇"}
+}
+
+for i, control in ipairs(controls) do
+    local btn = Instance.new("TextButton")
+    btn.Name = control.Key .. "Btn"
+    btn.Size = UDim2.new(0, 45, 0, 35)
+    btn.Position = UDim2.new((i-1) * 0.15 + 0.05, 0, 0.5, -17.5)
+    btn.BackgroundColor3 = Color3.fromRGB(60, 60, 100)
+    btn.BackgroundTransparency = 0.3
+    btn.BorderSizePixel = 0
+    btn.Text = control.Label
+    btn.TextColor3 = Color3.fromRGB(200, 200, 255)
+    btn.TextSize = 16
+    btn.Font = Enum.Font.GothamBold
+    btn.Parent = controlsContainer
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 8)
+    btnCorner.Parent = btn
+end
+
+-- ============================================
+-- FUNÇÕES DO SISTEMA DE VOO
+-- ============================================
+
+local function updateFlightStatus(active)
+    config.isFlying = active
+    
+    local statusColor = active and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+    local statusTextColor = active and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
+    local statusTextStr = active and "🟢 VOO ATIVADO" or "🔴 VOO DESATIVADO"
+    local statusSubStr = active and "Voando livremente!" or "Pressione o botão para ativar"
+    local btnText = active and "🛬 DESATIVAR VOO" or "🚀 ATIVAR VOO"
+    local btnColor = active and Color3.fromRGB(200, 50, 50) or Color3.fromRGB(80, 50, 200)
+    
+    -- Atualizar interface
+    statusIndicator.BackgroundColor3 = statusColor
+    statusIndicator.BackgroundTransparency = 0.2
+    pulse.BackgroundColor3 = statusColor
+    statusText.Text = statusTextStr
+    statusText.TextColor3 = statusTextColor
+    statusSub.Text = statusSubStr
+    toggleBtn.Text = btnText
+    toggleBtn.BackgroundColor3 = btnColor
+    toggleBtn.BackgroundTransparency = 0.15
+    
+    -- Animação do indicador
+    local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local pulseTween = TweenService:Create(pulse, tweenInfo, {
+        Size = active and UDim2.new(2, 20, 2, 20) or UDim2.new(1, 10, 1, 10),
+        BackgroundTransparency = active and 0.3 or 0.7
+    })
+    pulseTween:Play()
+    
+    -- Animação do botão
+    local btnTween = TweenService:Create(toggleBtn, tweenInfo, {
+        BackgroundTransparency = active and 0.25 or 0.15
+    })
+    btnTween:Play()
+end
+
+local function startFlight()
+    if not character or not humanoid or not rootPart then
+        character = player.Character
+        if not character then return end
+        humanoid = character:WaitForChild("Humanoid")
+        rootPart = character:WaitForChild("HumanoidRootPart")
+    end
+    
+    -- Criar BodyVelocity
+    bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.MaxForce = Vector3.new(100000, 100000, 100000)
+    bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+    bodyVelocity.Parent = rootPart
+    
+    -- Desabilitar gravidade
+    humanoid.PlatformStand = true
+    
+    updateFlightStatus(true)
+end
+
+local function stopFlight()
+    if bodyVelocity then
+        bodyVelocity:Destroy()
+        bodyVelocity = nil
+    end
+    
+    if humanoid then
+        humanoid.PlatformStand = false
+    end
+    
+    updateFlightStatus(false)
+end
+
+local function updateFlight()
+    if not config.isFlying or not bodyVelocity or not character or not rootPart then
+        return
+    end
+    
+    local moveDirection = Vector3.new(0, 0, 0)
+    local camera = workspace.CurrentCamera
+    local cameraCFrame = camera.CFrame
+    
+    -- Calcular direção baseada nas teclas
+    local forward = cameraCFrame.LookVector
+    local right = cameraCFrame.RightVector
+    
+    -- Manter apenas componentes horizontais
+    forward = Vector3.new(forward.X, 0, forward.Z).Unit
+    right = Vector3.new(right.X, 0, right.Z).Unit
+    
+    if keys.W then
+        moveDirection = moveDirection + forward
+    end
+    if keys.S then
+        moveDirection = moveDirection - forward
+    end
+    if keys.A then
+        moveDirection = moveDirection - right
+    end
+    if keys.D then
+        moveDirection = moveDirection + right
+    end
+    
+    -- Normalizar direção horizontal
+    if moveDirection.Magnitude > 0 then
+        moveDirection = moveDirection.Unit * config.FlightSpeed
+    end
+    
+    -- Adicionar vertical (espaço e shift)
+    if keys.Space then
+        moveDirection = moveDirection + Vector3.new(0, config.FlightSpeed, 0)
+    end
+    if keys.Shift then
+        moveDirection = moveDirection - Vector3.new(0, config.FlightSpeed, 0)
+    end
+    
+    bodyVelocity.Velocity = moveDirection
+end
+
+-- ============================================
+-- EVENTOS E INTERAÇÕES
+-- ============================================
+
+-- Toggle do voo
+toggleBtn.MouseButton1Click:Connect(function()
+    if config.isFlying then
+        stopFlight()
+    else
+        startFlight()
+    end
+end)
+
+-- Slider de velocidade
+local function updateSlider(input)
+    local relativeX = math.clamp((input.Position.X - sliderTrack.AbsolutePosition.X) / sliderTrack.AbsoluteSize.X, 0, 1)
+    local newSpeed = config.MinSpeed + (config.MaxSpeed - config.MinSpeed) * relativeX
+    config.FlightSpeed = math.round(newSpeed / 5) * 5
+    config.FlightSpeed = math.clamp(config.FlightSpeed, config.MinSpeed, config.MaxSpeed)
+    
+    -- Atualizar UI
+    sliderFill.Size = UDim2.new(relativeX, 0, 1, 0)
+    sliderBtn.Position = UDim2.new(relativeX, -12, 0.5, -12)
+    speedLabel.Text = "⚡ Velocidade: " .. tostring(config.FlightSpeed)
+end
+
+sliderBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        updateSlider(input)
+        local connection
+        connection = UserInputService.InputChanged:Connect(function(inputChanged)
+            if inputChanged.UserInputType == Enum.UserInputType.MouseMovement then
+                updateSlider(inputChanged)
+            end
+        end)
+        UserInputService.InputEnded:Connect(function(inputEnded)
+            if inputEnded.UserInputType == Enum.UserInputType.MouseButton1 then
+                if connection then
+                    connection:Disconnect()
+                end
+            end
+        end)
+    end
+end)
+
+-- Teclas
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    local key = input.KeyCode
+    if key == Enum.KeyCode.W then keys.W = true
+    elseif key == Enum.KeyCode.A then keys.A = true
+    elseif key == Enum.KeyCode.S then keys.S = true
+    elseif key == Enum.KeyCode.D then keys.D = true
+    elseif key == Enum.KeyCode.Space then keys.Space = true
+    elseif key == Enum.KeyCode.LeftShift then keys.Shift = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    local key = input.KeyCode
+    if key == Enum.KeyCode.W then keys.W = false
+    elseif key == Enum.KeyCode.A then keys.A = false
+    elseif key == Enum.KeyCode.S then keys.S = false
+    elseif key == Enum.KeyCode.D then keys.D = false
+    elseif key == Enum.KeyCode.Space then keys.Space = false
+    elseif key == Enum.KeyCode.LeftShift then keys.Shift = false
+    end
+end)
+
+-- Loop de voo
+RunService.Heartbeat:Connect(function()
+    if config.isFlying then
+        updateFlight()
+    end
+end)
+
+-- Minimizar/Restaurar
+minimizeBtn.MouseButton1Click:Connect(function()
+    config.isMinimized = not config.isMinimized
+    local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    
+    if config.isMinimized then
+        local tween = TweenService:Create(mainFrame, tweenInfo, {
+            Size = UDim2.new(0, 380, 0, 60)
+        })
+        tween:Play()
+        content.Visible = false
+        minimizeBtn.Image = "rbxassetid://5076896581"
+    else
+        local tween = TweenService:Create(mainFrame, tweenInfo, {
+            Size = UDim2.new(0, 380, 0, 500)
+        })
+        tween:Play()
+        content.Visible = true
+        minimizeBtn.Image = "rbxassetid://5076896579"
+    end
+end)
+
+-- Fechar
+closeBtn.MouseButton1Click:Connect(function()
+    if config.isFlying then
+        stopFlight()
+    end
+    screenGui:Destroy()
+end)
+
+-- Drag and drop
+local dragging = false
+local dragInput = nil
+local dragStart = nil
+local startPos = nil
+
+header.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+header.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+-- Efeitos de hover
+local function addHoverEffect(btn)
+    btn.MouseEnter:Connect(function()
+        local tween = TweenService:Create(btn, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
+            BackgroundTransparency = 0.1,
+            Size = btn == toggleBtn and UDim2.new(0.92, 0, 0, 57) or btn.Size
+        })
+        tween:Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        local tween = TweenService:Create(btn, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
+            BackgroundTransparency = btn == toggleBtn and 0.15 or 0.3,
+            Size = btn == toggleBtn and UDim2.new(0.9, 0, 0, 55) or btn.Size
+        })
+        tween:Play()
+    end)
+end
+
+addHoverEffect(toggleBtn)
+addHoverEffect(minimizeBtn)
+addHoverEffect(closeBtn)
+
+-- Animação de entrada
+local entryTween = TweenService:Create(mainFrame, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+    Position = UDim2.new(0.5, -190, 0.5, -250),
+    BackgroundTransparency = 0.25
+})
+entryTween:Play()
+
+-- Inicializar
+updateFlightStatus(false)
+
+-- Reset no respawn
+player.CharacterAdded:Connect(function(newChar)
+    character = newChar
+    humanoid = character:WaitForChild("Humanoid")
+    rootPart = character:WaitForChild("HumanoidRootPart")
+    
+    if config.isFlying then
+        stopFlight()
+        startFlight()
+    end
+end)
+
+print("✈️ Flight System carregado com sucesso!")
+
+-- ============================================
+-- LIMPEZA DE RECURSOS
+-- ============================================
+
+game:BindToClose(function()
+    if config.isFlying then
+        stopFlight()
+    end
+    if blurEffect then
+        blurEffect:Destroy()
+    end
+end)
