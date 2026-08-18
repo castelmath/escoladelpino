@@ -1,11 +1,31 @@
 --[[
-    Sistema de Voo Premium - Universal
-    Funciona em qualquer jogo Roblox
-    Carregue com: loadstring(game:HttpGet("https://raw.githubusercontent.com/castelmath/escoladelpino/refs/heads/main/fly"))()
+    Sistema de Aimbot + KillAura - Universal
+    Entra em modo trial e elimina inimigos automaticamente
+    Carregue com: loadstring(game:HttpGet("https://raw.githubusercontent.com/castelmath/escoladelpino/refs/heads/main/aimbot"))()
 ]]
 
 -- ============================================
--- CONFIGURAÇÕES INICIAIS
+-- CONFIGURAÇÕES DO SISTEMA
+-- ============================================
+
+local config = {
+    Enabled = false,
+    TeamCheck = false,
+    WallCheck = false,
+    Smoothness = 10,
+    Range = 250,
+    HitChance = 100,
+    AimPart = "Head", -- Head, HumanoidRootPart, Torso
+    FOV = 360,
+    TargetMode = "Closest", -- Closest, LowestHealth, Random
+    KillAuraEnabled = true,
+    KillAuraDelay = 0.1,
+    KillAuraRange = 150,
+    AutoToggle = true -- Ativa automaticamente ao iniciar
+}
+
+-- ============================================
+-- VARIÁVEIS GLOBAIS
 -- ============================================
 
 local Players = game:GetService("Players")
@@ -13,142 +33,276 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
-local StarterGui = game:GetService("StarterGui")
+local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid")
-local rootPart = character:WaitForChild("HumanoidRootPart")
+local camera = workspace.CurrentCamera
+local mouse = player:GetMouse()
 
--- ============================================
--- CONFIGURAÇÕES DO SISTEMA
--- ============================================
-
-local config = {
-    FlightSpeed = 50,
-    MinSpeed = 10,
-    MaxSpeed = 150,
-    SpeedIncrement = 5,
-    isFlying = false,
-    isMinimized = false,
-    UIEnabled = true
-}
-
--- ============================================
--- VARIÁVEIS DE CONTROLE
--- ============================================
-
-local keys = {
-    W = false,
-    A = false,
-    S = false,
-    D = false,
-    Space = false,
-    Shift = false
-}
-
-local bodyVelocity = nil
-local isInVehicle = false
-local currentVehicle = nil
+local currentTarget = nil
+local isAiming = false
+local killAuraEnabled = false
+local killAuraThread = nil
 
 -- ============================================
 -- FUNÇÕES DE UTILIDADE
 -- ============================================
 
-local function safeWaitForChild(parent, name, timeout)
-    timeout = timeout or 5
-    local start = tick()
-    while tick() - start < timeout do
-        local child = parent:FindFirstChild(name)
-        if child then return child end
+local function getCharacter()
+    return player.Character
+end
+
+local function isAlive(char)
+    if not char then return false end
+    local humanoid = char:FindFirstChild("Humanoid")
+    return humanoid and humanoid.Health > 0 and char.Parent ~= nil
+end
+
+local function getPlayers()
+    local enemies = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= player then
+            local char = plr.Character
+            if isAlive(char) then
+                -- Verificar se é inimigo (time check)
+                if config.TeamCheck then
+                    local plrTeam = plr.Team
+                    local myTeam = player.Team
+                    if plrTeam and myTeam and plrTeam == myTeam then
+                        continue
+                    end
+                end
+                table.insert(enemies, plr)
+            end
+        end
+    end
+    return enemies
+end
+
+local function getPart(char, partName)
+    if not char then return nil end
+    local part = char:FindFirstChild(partName)
+    if part and part:IsA("BasePart") then
+        return part
+    end
+    -- Fallback para HumanoidRootPart
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getClosestPart(char, position)
+    local parts = {"Head", "HumanoidRootPart", "Torso", "UpperTorso", "LowerTorso"}
+    local closest = nil
+    local closestDist = math.huge
+    
+    for _, partName in ipairs(parts) do
+        local part = char:FindFirstChild(partName)
+        if part and part:IsA("BasePart") then
+            local dist = (part.Position - position).Magnitude
+            if dist < closestDist then
+                closestDist = dist
+                closest = part
+            end
+        end
+    end
+    
+    return closest or char:FindFirstChild("HumanoidRootPart")
+end
+
+local function isVisible(targetPart)
+    if not targetPart then return false end
+    if not config.WallCheck then return true end
+    
+    local origin = camera.CFrame.Position
+    local direction = (targetPart.Position - origin).Unit
+    local ray = Ray.new(origin, direction * (origin - targetPart.Position).Magnitude)
+    local hit, position = Workspace:FindPartOnRay(ray, player.Character, false, true)
+    
+    if not hit then return true end
+    local hitParent = hit.Parent
+    if hitParent and (hitParent:IsA("BasePart") or hitParent:IsA("MeshPart")) then
+        local humanoid = hitParent:FindFirstChild("Humanoid")
+        if humanoid then return true end
+    end
+    return false
+end
+
+local function getTargets()
+    local targets = {}
+    local myPos = camera.CFrame.Position
+    
+    for _, plr in ipairs(getPlayers()) do
+        local char = plr.Character
+        if char then
+            local part = getClosestPart(char, myPos)
+            if part then
+                local dist = (part.Position - myPos).Magnitude
+                if dist <= config.Range then
+                    if isVisible(part) then
+                        table.insert(targets, {
+                            Player = plr,
+                            Part = part,
+                            Distance = dist,
+                            Health = (char:FindFirstChild("Humanoid") and char.Humanoid.Health) or 100
+                        })
+                    end
+                end
+            end
+        end
+    end
+    
+    return targets
+end
+
+local function selectTarget(targets)
+    if #targets == 0 then return nil end
+    
+    if config.TargetMode == "Closest" then
+        table.sort(targets, function(a, b) return a.Distance < b.Distance end)
+        return targets[1]
+    elseif config.TargetMode == "LowestHealth" then
+        table.sort(targets, function(a, b) return a.Health < b.Health end)
+        return targets[1]
+    elseif config.TargetMode == "Random" then
+        return targets[math.random(1, #targets)]
+    end
+    
+    return targets[1]
+end
+
+-- ============================================
+-- AIMBOT
+-- ============================================
+
+local function aimAt(target)
+    if not target or not target.Part then return end
+    
+    local targetPos = target.Part.Position
+    local targetCFrame = CFrame.new(camera.CFrame.Position, targetPos)
+    
+    -- Suavização
+    if config.Smoothness > 1 then
+        local currentCF = camera.CFrame
+        local newCF = CFrame.new(currentCF.Position, targetPos)
+        local tweenInfo = TweenInfo.new(0.05 * (config.Smoothness / 10), Enum.EasingStyle.Linear)
+        
+        local tween = TweenService:Create(camera, tweenInfo, {
+            CFrame = newCF
+        })
+        tween:Play()
+    else
+        camera.CFrame = CFrame.new(camera.CFrame.Position, targetPos)
+    end
+end
+
+local function aimbotLoop()
+    while config.Enabled do
+        if isAiming then
+            local targets = getTargets()
+            local target = selectTarget(targets)
+            
+            if target then
+                currentTarget = target
+                aimAt(target)
+            else
+                currentTarget = nil
+            end
+        end
+        task.wait(0.05)
+    end
+end
+
+-- ============================================
+-- KILL AURA
+-- ============================================
+
+local function killPlayer(target)
+    if not target or not target.Character then return end
+    
+    local char = target.Character
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return end
+    
+    -- Tentar métodos diferentes para matar
+    local methods = {
+        function()
+            -- Método 1: Setar saúde para 0
+            humanoid.Health = 0
+        end,
+        function()
+            -- Método 2: BreakJoints
+            char:BreakJoints()
+        end,
+        function()
+            -- Método 3: Remover humanoid
+            humanoid:Destroy()
+        end
+    }
+    
+    for _, method in ipairs(methods) do
+        pcall(method)
+        if not isAlive(char) then break end
+    end
+end
+
+local function killAura()
+    while killAuraEnabled do
+        local myPos = camera.CFrame.Position
+        
+        for _, plr in ipairs(getPlayers()) do
+            local char = plr.Character
+            if char then
+                local part = getClosestPart(char, myPos)
+                if part then
+                    local dist = (part.Position - myPos).Magnitude
+                    if dist <= config.KillAuraRange then
+                        if isVisible(part) then
+                            killPlayer(plr)
+                            task.wait(config.KillAuraDelay)
+                        end
+                    end
+                end
+            end
+        end
+        
         task.wait(0.1)
     end
-    return nil
-end
-
-local function getCharacter()
-    character = player.Character or player.CharacterAdded:Wait()
-    if not character then return false end
-    
-    humanoid = safeWaitForChild(character, "Humanoid")
-    rootPart = safeWaitForChild(character, "HumanoidRootPart")
-    
-    if not humanoid or not rootPart then
-        return false
-    end
-    
-    return true
-end
-
-local function isPlayerInVehicle()
-    if not character then return false end
-    local seat = character:FindFirstChild("SeatPart") or character:FindFirstChildOfClass("VehicleSeat")
-    return seat ~= nil
 end
 
 -- ============================================
--- CRIAÇÃO DA INTERFACE (ESTILO IKAT)
+-- INTERFACE PREMIUM
 -- ============================================
-
--- Verificar se já existe uma UI
-local existingUI = player.PlayerGui:FindFirstChild("FlightUI")
-if existingUI then
-    existingUI:Destroy()
-end
 
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "FlightUI"
+screenGui.Name = "AimBotUI"
 screenGui.Parent = player.PlayerGui
 screenGui.ResetOnSpawn = false
-screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
--- Efeito de blur
-local function createBlurEffect()
-    local blur = Instance.new("BlurEffect")
-    blur.Size = 0
-    blur.Parent = Lighting
-    return blur
-end
-
-local blurEffect = createBlurEffect()
-
--- ============================================
--- CONTAINER PRINCIPAL
--- ============================================
-
+-- Frame principal
 local mainFrame = Instance.new("Frame")
-mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 380, 0, 500)
-mainFrame.Position = UDim2.new(0.5, -190, 0.5, -250)
-mainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 25)
-mainFrame.BackgroundTransparency = 0.25
+mainFrame.Size = UDim2.new(0, 350, 0, 450)
+mainFrame.Position = UDim2.new(0.5, -175, 0.5, -225)
+mainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 20)
+mainFrame.BackgroundTransparency = 0.2
 mainFrame.BorderSizePixel = 0
 mainFrame.ClipsDescendants = true
 mainFrame.Parent = screenGui
 
--- Borda com gradiente
-local borderGradient = Instance.new("Frame")
-borderGradient.Name = "BorderGradient"
-borderGradient.Size = UDim2.new(1, 0, 1, 0)
-borderGradient.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-borderGradient.BackgroundTransparency = 1
-borderGradient.Parent = mainFrame
-
-local borderGradientInstance = Instance.new("UIGradient")
-borderGradientInstance.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(100, 50, 255)),
-    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(50, 100, 255)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 50, 255))
-})
-borderGradientInstance.Parent = borderGradient
-
+-- Borda
 local borderCorner = Instance.new("UICorner")
-borderCorner.CornerRadius = UDim.new(0, 20)
+borderCorner.CornerRadius = UDim.new(0, 16)
 borderCorner.Parent = mainFrame
+
+-- Gradiente
+local gradient = Instance.new("UIGradient")
+gradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 10, 50)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(10, 10, 40)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(30, 10, 50))
+})
+gradient.Parent = mainFrame
 
 -- Sombra
 local shadow = Instance.new("ImageLabel")
-shadow.Name = "Shadow"
 shadow.Size = UDim2.new(1, 40, 1, 40)
 shadow.Position = UDim2.new(0, -20, 0, -20)
 shadow.BackgroundTransparency = 1
@@ -159,620 +313,395 @@ shadow.ScaleType = Enum.ScaleType.Slice
 shadow.SliceCenter = Rect.new(10, 10, 10, 10)
 shadow.Parent = mainFrame
 
--- ============================================
--- HEADER
--- ============================================
-
+-- Header
 local header = Instance.new("Frame")
-header.Name = "Header"
-header.Size = UDim2.new(1, 0, 0, 60)
-header.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
+header.Size = UDim2.new(1, 0, 0, 50)
+header.BackgroundColor3 = Color3.fromRGB(40, 20, 60)
 header.BackgroundTransparency = 0.4
 header.BorderSizePixel = 0
 header.Parent = mainFrame
 
 local headerCorner = Instance.new("UICorner")
-headerCorner.CornerRadius = UDim.new(0, 20)
+headerCorner.CornerRadius = UDim.new(0, 16)
 headerCorner.Parent = header
-
--- Ícone
-local headerIcon = Instance.new("ImageLabel")
-headerIcon.Name = "HeaderIcon"
-headerIcon.Size = UDim2.new(0, 30, 0, 30)
-headerIcon.Position = UDim2.new(0, 15, 0.5, -15)
-headerIcon.BackgroundTransparency = 1
-headerIcon.Image = "rbxassetid://5076896571"
-headerIcon.ImageColor3 = Color3.fromRGB(150, 100, 255)
-headerIcon.Parent = header
 
 -- Título
 local title = Instance.new("TextLabel")
-title.Name = "Title"
-title.Size = UDim2.new(0.6, 0, 1, 0)
-title.Position = UDim2.new(0, 55, 0, 0)
+title.Size = UDim2.new(0.7, 0, 1, 0)
+title.Position = UDim2.new(0, 15, 0, 0)
 title.BackgroundTransparency = 1
-title.Text = "✈️ Flight System"
+title.Text = "🎯 Aimbot + KillAura"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
-title.TextSize = 22
+title.TextSize = 20
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Font = Enum.Font.GothamBold
 title.Parent = header
 
--- Subtítulo
-local subtitle = Instance.new("TextLabel")
-subtitle.Name = "Subtitle"
-subtitle.Size = UDim2.new(0.6, 0, 0.5, 0)
-subtitle.Position = UDim2.new(0, 55, 0.5, 0)
-subtitle.BackgroundTransparency = 1
-subtitle.Text = "Universal Flight Controller"
-subtitle.TextColor3 = Color3.fromRGB(150, 150, 200)
-subtitle.TextSize = 12
-subtitle.TextXAlignment = Enum.TextXAlignment.Left
-subtitle.Font = Enum.Font.Gotham
-subtitle.Parent = header
-
--- Botão minimizar
+-- Botões do header
 local minimizeBtn = Instance.new("ImageButton")
-minimizeBtn.Name = "MinimizeBtn"
-minimizeBtn.Size = UDim2.new(0, 35, 0, 35)
-minimizeBtn.Position = UDim2.new(1, -95, 0, 12)
-minimizeBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
-minimizeBtn.BackgroundTransparency = 0.3
+minimizeBtn.Size = UDim2.new(0, 30, 0, 30)
+minimizeBtn.Position = UDim2.new(1, -80, 0, 10)
+minimizeBtn.BackgroundTransparency = 1
 minimizeBtn.Image = "rbxassetid://5076896579"
 minimizeBtn.ImageColor3 = Color3.fromRGB(200, 200, 255)
 minimizeBtn.Parent = header
 
-local minimizeCorner = Instance.new("UICorner")
-minimizeCorner.CornerRadius = UDim.new(1, 0)
-minimizeCorner.Parent = minimizeBtn
-
--- Botão fechar
 local closeBtn = Instance.new("ImageButton")
-closeBtn.Name = "CloseBtn"
-closeBtn.Size = UDim2.new(0, 35, 0, 35)
-closeBtn.Position = UDim2.new(1, -50, 0, 12)
-closeBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
-closeBtn.BackgroundTransparency = 0.3
+closeBtn.Size = UDim2.new(0, 30, 0, 30)
+closeBtn.Position = UDim2.new(1, -40, 0, 10)
+closeBtn.BackgroundTransparency = 1
 closeBtn.Image = "rbxassetid://5076896575"
 closeBtn.ImageColor3 = Color3.fromRGB(255, 100, 100)
 closeBtn.Parent = header
 
-local closeCorner = Instance.new("UICorner")
-closeCorner.CornerRadius = UDim.new(1, 0)
-closeCorner.Parent = closeBtn
-
--- ============================================
--- CONTEÚDO
--- ============================================
-
-local content = Instance.new("Frame")
-content.Name = "Content"
-content.Size = UDim2.new(1, 0, 1, -60)
-content.Position = UDim2.new(0, 0, 0, 60)
+-- Conteúdo
+local content = Instance.new("ScrollingFrame")
+content.Size = UDim2.new(1, 0, 1, -50)
+content.Position = UDim2.new(0, 0, 0, 50)
 content.BackgroundTransparency = 1
+content.CanvasSize = UDim2.new(0, 0, 0, 500)
+content.ScrollBarThickness = 4
 content.Parent = mainFrame
 
--- ============================================
--- STATUS
--- ============================================
-
-local statusContainer = Instance.new("Frame")
-statusContainer.Name = "StatusContainer"
-statusContainer.Size = UDim2.new(0.9, 0, 0, 70)
-statusContainer.Position = UDim2.new(0.05, 0, 0.03, 0)
-statusContainer.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-statusContainer.BackgroundTransparency = 0.08
-statusContainer.BorderSizePixel = 0
-statusContainer.ClipsDescendants = true
-statusContainer.Parent = content
-
-local statusCorner = Instance.new("UICorner")
-statusCorner.CornerRadius = UDim.new(0, 14)
-statusCorner.Parent = statusContainer
-
--- Brilho do status
-local statusGlow = Instance.new("Frame")
-statusGlow.Name = "StatusGlow"
-statusGlow.Size = UDim2.new(0.8, 0, 0.8, 0)
-statusGlow.Position = UDim2.new(0.1, 0, 0.1, 0)
-statusGlow.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-statusGlow.BackgroundTransparency = 0.8
-statusGlow.BorderSizePixel = 0
-statusGlow.Parent = statusContainer
-
-local glowCorner = Instance.new("UICorner")
-glowCorner.CornerRadius = UDim.new(1, 0)
-glowCorner.Parent = statusGlow
-
--- Indicador
-local statusIndicator = Instance.new("Frame")
-statusIndicator.Name = "StatusIndicator"
-statusIndicator.Size = UDim2.new(0, 18, 0, 18)
-statusIndicator.Position = UDim2.new(0, 20, 0.5, -9)
-statusIndicator.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-statusIndicator.BackgroundTransparency = 0.2
-statusIndicator.BorderSizePixel = 0
-statusIndicator.ClipsDescendants = true
-statusIndicator.Parent = statusContainer
-
-local indicatorCorner = Instance.new("UICorner")
-indicatorCorner.CornerRadius = UDim.new(1, 0)
-indicatorCorner.Parent = statusIndicator
-
--- Pulso
-local pulse = Instance.new("Frame")
-pulse.Name = "Pulse"
-pulse.Size = UDim2.new(1, 10, 1, 10)
-pulse.Position = UDim2.new(0, -5, 0, -5)
-pulse.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-pulse.BackgroundTransparency = 0.7
-pulse.BorderSizePixel = 0
-pulse.ClipsDescendants = true
-pulse.Parent = statusIndicator
-
-local pulseCorner = Instance.new("UICorner")
-pulseCorner.CornerRadius = UDim.new(1, 0)
-pulseCorner.Parent = pulse
-
--- Texto status
-local statusText = Instance.new("TextLabel")
-statusText.Name = "StatusText"
-statusText.Size = UDim2.new(0.7, 0, 1, 0)
-statusText.Position = UDim2.new(0, 50, 0, 0)
-statusText.BackgroundTransparency = 1
-statusText.Text = "VOO DESATIVADO"
-statusText.TextColor3 = Color3.fromRGB(200, 200, 220)
-statusText.TextSize = 18
-statusText.TextXAlignment = Enum.TextXAlignment.Left
-statusText.Font = Enum.Font.GothamBold
-statusText.Parent = statusContainer
-
--- Subtítulo status
-local statusSub = Instance.new("TextLabel")
-statusSub.Name = "StatusSub"
-statusSub.Size = UDim2.new(0.7, 0, 0.5, 0)
-statusSub.Position = UDim2.new(0, 50, 0.5, 0)
-statusSub.BackgroundTransparency = 1
-statusSub.Text = "Pressione o botão para ativar"
-statusSub.TextColor3 = Color3.fromRGB(150, 150, 180)
-statusSub.TextSize = 12
-statusSub.TextXAlignment = Enum.TextXAlignment.Left
-statusSub.Font = Enum.Font.Gotham
-statusSub.Parent = statusContainer
-
--- ============================================
--- BOTÃO TOGGLE
--- ============================================
-
-local toggleBtn = Instance.new("TextButton")
-toggleBtn.Name = "ToggleBtn"
-toggleBtn.Size = UDim2.new(0.9, 0, 0, 55)
-toggleBtn.Position = UDim2.new(0.05, 0, 0.2, 0)
-toggleBtn.BackgroundColor3 = Color3.fromRGB(80, 50, 200)
-toggleBtn.BackgroundTransparency = 0.15
-toggleBtn.BorderSizePixel = 0
-toggleBtn.Text = "🚀 ATIVAR VOO"
-toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-toggleBtn.TextSize = 20
-toggleBtn.Font = Enum.Font.GothamBold
-toggleBtn.ClipsDescendants = true
-toggleBtn.Parent = content
+-- Botão toggle principal (TRIAL)
+local mainToggle = Instance.new("TextButton")
+mainToggle.Size = UDim2.new(0.9, 0, 0, 50)
+mainToggle.Position = UDim2.new(0.05, 0, 0.02, 0)
+mainToggle.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+mainToggle.BackgroundTransparency = 0.2
+mainToggle.BorderSizePixel = 0
+mainToggle.Text = "🔴 MODO TRIAL DESATIVADO"
+mainToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+mainToggle.TextSize = 18
+mainToggle.Font = Enum.Font.GothamBold
+mainToggle.Parent = content
 
 local toggleCorner = Instance.new("UICorner")
-toggleCorner.CornerRadius = UDim.new(0, 14)
-toggleCorner.Parent = toggleBtn
+toggleCorner.CornerRadius = UDim.new(0, 12)
+toggleCorner.Parent = mainToggle
+
+-- Seção Aimbot
+local aimbotSection = Instance.new("Frame")
+aimbotSection.Size = UDim2.new(0.9, 0, 0, 150)
+aimbotSection.Position = UDim2.new(0.05, 0, 0.15, 0)
+aimbotSection.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+aimbotSection.BackgroundTransparency = 0.05
+aimbotSection.BorderSizePixel = 0
+aimbotSection.ClipsDescendants = true
+aimbotSection.Parent = content
+
+local sectionCorner = Instance.new("UICorner")
+sectionCorner.CornerRadius = UDim.new(0, 10)
+sectionCorner.Parent = aimbotSection
+
+-- Título da seção
+local sectionTitle = Instance.new("TextLabel")
+sectionTitle.Size = UDim2.new(1, 0, 0, 30)
+sectionTitle.Position = UDim2.new(0, 10, 0, 5)
+sectionTitle.BackgroundTransparency = 1
+sectionTitle.Text = "⚡ Aimbot"
+sectionTitle.TextColor3 = Color3.fromRGB(200, 200, 255)
+sectionTitle.TextSize = 16
+sectionTitle.TextXAlignment = Enum.TextXAlignment.Left
+sectionTitle.Font = Enum.Font.GothamBold
+sectionTitle.Parent = aimbotSection
+
+-- Toggle Aimbot
+local aimbotToggle = Instance.new("TextButton")
+aimbotToggle.Size = UDim2.new(0.45, 0, 0, 35)
+aimbotToggle.Position = UDim2.new(0.03, 0, 0.35, 0)
+aimbotToggle.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+aimbotToggle.BackgroundTransparency = 0.2
+aimbotToggle.BorderSizePixel = 0
+aimbotToggle.Text = "ON"
+aimbotToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+aimbotToggle.TextSize = 14
+aimbotToggle.Font = Enum.Font.GothamBold
+aimbotToggle.Parent = aimbotSection
+
+local aimbotCorner = Instance.new("UICorner")
+aimbotCorner.CornerRadius = UDim.new(0, 8)
+aimbotCorner.Parent = aimbotToggle
+
+-- Toggle KillAura
+local killToggle = Instance.new("TextButton")
+killToggle.Size = UDim2.new(0.45, 0, 0, 35)
+killToggle.Position = UDim2.new(0.52, 0, 0.35, 0)
+killToggle.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+killToggle.BackgroundTransparency = 0.2
+killToggle.BorderSizePixel = 0
+killToggle.Text = "ON"
+killToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+killToggle.TextSize = 14
+killToggle.Font = Enum.Font.GothamBold
+killToggle.Parent = aimbotSection
+
+local killCorner = Instance.new("UICorner")
+killCorner.CornerRadius = UDim.new(0, 8)
+killCorner.Parent = killToggle
+
+-- Slider de alcance
+local rangeSlider = createSlider("Alcance", config.Range, 50, 500, aimbotSection, UDim2.new(0, 0, 0.7, 0))
+
+-- Slider de suavização
+local smoothSlider = createSlider("Suavização", config.Smoothness, 1, 20, aimbotSection, UDim2.new(0, 0, 0.9, 0))
+
+-- Seção KillAura
+local killSection = Instance.new("Frame")
+killSection.Size = UDim2.new(0.9, 0, 0, 100)
+killSection.Position = UDim2.new(0.05, 0, 0.45, 0)
+killSection.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+killSection.BackgroundTransparency = 0.05
+killSection.BorderSizePixel = 0
+killSection.ClipsDescendants = true
+killSection.Parent = content
+
+local killCorner2 = Instance.new("UICorner")
+killCorner2.CornerRadius = UDim.new(0, 10)
+killCorner2.Parent = killSection
+
+-- Título KillAura
+local killTitle = Instance.new("TextLabel")
+killTitle.Size = UDim2.new(1, 0, 0, 30)
+killTitle.Position = UDim2.new(0, 10, 0, 5)
+killTitle.BackgroundTransparency = 1
+killTitle.Text = "💀 KillAura"
+killTitle.TextColor3 = Color3.fromRGB(255, 200, 200)
+killTitle.TextSize = 16
+killTitle.TextXAlignment = Enum.TextXAlignment.Left
+killTitle.Font = Enum.Font.GothamBold
+killTitle.Parent = killSection
+
+-- Slider KillAura Range
+local killRangeSlider = createSlider("Alcance KA", config.KillAuraRange, 50, 300, killSection, UDim2.new(0, 0, 0.55, 0))
+
+-- Slider KillAura Delay
+local killDelaySlider = createSlider("Delay KA", config.KillAuraDelay * 100, 1, 50, killSection, UDim2.new(0, 0, 0.8, 0))
+
+-- Status bar
+local statusBar = Instance.new("TextLabel")
+statusBar.Size = UDim2.new(0.9, 0, 0, 30)
+statusBar.Position = UDim2.new(0.05, 0, 0.82, 0)
+statusBar.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+statusBar.BackgroundTransparency = 0.1
+statusBar.BorderSizePixel = 0
+statusBar.Text = "🎯 Nenhum alvo encontrado"
+statusBar.TextColor3 = Color3.fromRGB(200, 200, 200)
+statusBar.TextSize = 14
+statusBar.Font = Enum.Font.Gotham
+statusBar.Parent = content
+
+local statusCorner = Instance.new("UICorner")
+statusCorner.CornerRadius = UDim.new(0, 8)
+statusCorner.Parent = statusBar
 
 -- ============================================
--- CONTROLE DE VELOCIDADE
+-- FUNÇÃO AUXILIAR PARA SLIDERS
 -- ============================================
 
-local speedContainer = Instance.new("Frame")
-speedContainer.Name = "SpeedContainer"
-speedContainer.Size = UDim2.new(0.9, 0, 0, 120)
-speedContainer.Position = UDim2.new(0.05, 0, 0.35, 0)
-speedContainer.BackgroundTransparency = 1
-speedContainer.Parent = content
-
--- Label velocidade
-local speedLabel = Instance.new("TextLabel")
-speedLabel.Name = "SpeedLabel"
-speedLabel.Size = UDim2.new(1, 0, 0, 30)
-speedLabel.Position = UDim2.new(0, 0, 0, 0)
-speedLabel.BackgroundTransparency = 1
-speedLabel.Text = "⚡ Velocidade: 50"
-speedLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
-speedLabel.TextSize = 17
-speedLabel.Font = Enum.Font.GothamBold
-speedLabel.TextXAlignment = Enum.TextXAlignment.Left
-speedLabel.Parent = speedContainer
-
--- Container slider
-local sliderContainer = Instance.new("Frame")
-sliderContainer.Name = "SliderContainer"
-sliderContainer.Size = UDim2.new(1, 0, 0, 45)
-sliderContainer.Position = UDim2.new(0, 0, 0, 35)
-sliderContainer.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-sliderContainer.BackgroundTransparency = 0.1
-sliderContainer.BorderSizePixel = 0
-sliderContainer.ClipsDescendants = true
-sliderContainer.Parent = speedContainer
-
-local sliderCorner = Instance.new("UICorner")
-sliderCorner.CornerRadius = UDim.new(1, 0)
-sliderCorner.Parent = sliderContainer
-
--- Track
-local sliderTrack = Instance.new("Frame")
-sliderTrack.Name = "SliderTrack"
-sliderTrack.Size = UDim2.new(0.95, 0, 0.25, 0)
-sliderTrack.Position = UDim2.new(0.025, 0, 0.5, -3)
-sliderTrack.BackgroundColor3 = Color3.fromRGB(80, 80, 120)
-sliderTrack.BackgroundTransparency = 0.4
-sliderTrack.BorderSizePixel = 0
-sliderTrack.ClipsDescendants = true
-sliderTrack.Parent = sliderContainer
-
-local trackCorner = Instance.new("UICorner")
-trackCorner.CornerRadius = UDim.new(1, 0)
-trackCorner.Parent = sliderTrack
-
--- Fill
-local sliderFill = Instance.new("Frame")
-sliderFill.Name = "SliderFill"
-sliderFill.Size = UDim2.new(0.5, 0, 1, 0)
-sliderFill.BackgroundColor3 = Color3.fromRGB(120, 80, 255)
-sliderFill.BackgroundTransparency = 0.1
-sliderFill.BorderSizePixel = 0
-sliderFill.ClipsDescendants = true
-sliderFill.Parent = sliderTrack
-
-local fillCorner = Instance.new("UICorner")
-fillCorner.CornerRadius = UDim.new(1, 0)
-fillCorner.Parent = sliderFill
-
--- Gradiente
-local fillGradient = Instance.new("UIGradient")
-fillGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(100, 50, 255)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(50, 100, 255))
-})
-fillGradient.Parent = sliderFill
-
--- Botão slider
-local sliderBtn = Instance.new("ImageButton")
-sliderBtn.Name = "SliderBtn"
-sliderBtn.Size = UDim2.new(0, 24, 0, 24)
-sliderBtn.Position = UDim2.new(0.5, -12, 0.5, -12)
-sliderBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-sliderBtn.BackgroundTransparency = 0.2
-sliderBtn.Image = "rbxassetid://5076896573"
-sliderBtn.ImageColor3 = Color3.fromRGB(200, 200, 255)
-sliderBtn.Parent = sliderContainer
-
-local btnCorner = Instance.new("UICorner")
-btnCorner.CornerRadius = UDim.new(1, 0)
-btnCorner.Parent = sliderBtn
-
--- Labels min/max
-local minLabel = Instance.new("TextLabel")
-minLabel.Name = "MinLabel"
-minLabel.Size = UDim2.new(0, 30, 0, 20)
-minLabel.Position = UDim2.new(0, 0, 0, 85)
-minLabel.BackgroundTransparency = 1
-minLabel.Text = tostring(config.MinSpeed)
-minLabel.TextColor3 = Color3.fromRGB(150, 150, 200)
-minLabel.TextSize = 13
-minLabel.Font = Enum.Font.Gotham
-minLabel.Parent = speedContainer
-
-local maxLabel = Instance.new("TextLabel")
-maxLabel.Name = "MaxLabel"
-maxLabel.Size = UDim2.new(0, 30, 0, 20)
-maxLabel.Position = UDim2.new(1, -30, 0, 85)
-maxLabel.BackgroundTransparency = 1
-maxLabel.Text = tostring(config.MaxSpeed)
-maxLabel.TextColor3 = Color3.fromRGB(150, 150, 200)
-maxLabel.TextSize = 13
-maxLabel.Font = Enum.Font.Gotham
-maxLabel.Parent = speedContainer
-
--- ============================================
--- CONTROLES RÁPIDOS
--- ============================================
-
-local controlsContainer = Instance.new("Frame")
-controlsContainer.Name = "ControlsContainer"
-controlsContainer.Size = UDim2.new(0.9, 0, 0, 50)
-controlsContainer.Position = UDim2.new(0.05, 0, 0.7, 0)
-controlsContainer.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-controlsContainer.BackgroundTransparency = 0.05
-controlsContainer.BorderSizePixel = 0
-controlsContainer.ClipsDescriptors = true
-controlsContainer.Parent = content
-
-local controlsCorner = Instance.new("UICorner")
-controlsCorner.CornerRadius = UDim.new(0, 12)
-controlsCorner.Parent = controlsContainer
-
--- Botões de controle
-local controls = {
-    {Key = "W", Label = "↑"},
-    {Key = "A", Label = "←"},
-    {Key = "S", Label = "↓"},
-    {Key = "D", Label = "→"},
-    {Key = "Space", Label = "⬆"},
-    {Key = "Shift", Label = "⬇"}
-}
-
-for i, control in ipairs(controls) do
-    local btn = Instance.new("TextButton")
-    btn.Name = control.Key .. "Btn"
-    btn.Size = UDim2.new(0, 45, 0, 35)
-    btn.Position = UDim2.new((i-1) * 0.15 + 0.05, 0, 0.5, -17.5)
-    btn.BackgroundColor3 = Color3.fromRGB(60, 60, 100)
-    btn.BackgroundTransparency = 0.3
-    btn.BorderSizePixel = 0
-    btn.Text = control.Label
-    btn.TextColor3 = Color3.fromRGB(200, 200, 255)
-    btn.TextSize = 16
-    btn.Font = Enum.Font.GothamBold
-    btn.Parent = controlsContainer
+function createSlider(labelText, defaultValue, minValue, maxValue, parent, position)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(1, -20, 0, 35)
+    container.Position = position
+    container.BackgroundTransparency = 1
+    container.Parent = parent
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.3, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = labelText .. ": " .. tostring(defaultValue)
+    label.TextColor3 = Color3.fromRGB(180, 180, 200)
+    label.TextSize = 12
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Font = Enum.Font.Gotham
+    label.Parent = container
+    
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(0.65, 0, 0.3, 0)
+    track.Position = UDim2.new(0.35, 0, 0.5, -2)
+    track.BackgroundColor3 = Color3.fromRGB(80, 80, 120)
+    track.BackgroundTransparency = 0.4
+    track.BorderSizePixel = 0
+    track.Parent = container
+    
+    local trackCorner = Instance.new("UICorner")
+    trackCorner.CornerRadius = UDim.new(1, 0)
+    trackCorner.Parent = track
+    
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new((defaultValue - minValue) / (maxValue - minValue), 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(150, 100, 255)
+    fill.BackgroundTransparency = 0.1
+    fill.BorderSizePixel = 0
+    fill.Parent = track
+    
+    local fillCorner = Instance.new("UICorner")
+    fillCorner.CornerRadius = UDim.new(1, 0)
+    fillCorner.Parent = fill
+    
+    local btn = Instance.new("ImageButton")
+    btn.Size = UDim2.new(0, 16, 0, 16)
+    btn.Position = UDim2.new((defaultValue - minValue) / (maxValue - minValue), -8, 0.5, -8)
+    btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    btn.BackgroundTransparency = 0.2
+    btn.Image = "rbxassetid://5076896573"
+    btn.ImageColor3 = Color3.fromRGB(200, 200, 255)
+    btn.Parent = container
     
     local btnCorner = Instance.new("UICorner")
-    btnCorner.CornerRadius = UDim.new(0, 8)
+    btnCorner.CornerRadius = UDim.new(1, 0)
     btnCorner.Parent = btn
-end
-
--- ============================================
--- FUNÇÕES DO SISTEMA DE VOO
--- ============================================
-
-local function updateFlightStatus(active)
-    config.isFlying = active
     
-    local statusColor = active and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
-    local statusTextColor = active and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
-    local statusTextStr = active and "🟢 VOO ATIVADO" or "🔴 VOO DESATIVADO"
-    local statusSubStr = active and "Voando livremente!" or "Pressione o botão para ativar"
-    local btnText = active and "🛬 DESATIVAR VOO" or "🚀 ATIVAR VOO"
-    local btnColor = active and Color3.fromRGB(200, 50, 50) or Color3.fromRGB(80, 50, 200)
-    
-    -- Atualizar UI
-    statusIndicator.BackgroundColor3 = statusColor
-    statusIndicator.BackgroundTransparency = 0.2
-    pulse.BackgroundColor3 = statusColor
-    statusText.Text = statusTextStr
-    statusText.TextColor3 = statusTextColor
-    statusSub.Text = statusSubStr
-    toggleBtn.Text = btnText
-    toggleBtn.BackgroundColor3 = btnColor
-    toggleBtn.BackgroundTransparency = 0.15
-    
-    -- Animações
-    local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local pulseTween = TweenService:Create(pulse, tweenInfo, {
-        Size = active and UDim2.new(2, 20, 2, 20) or UDim2.new(1, 10, 1, 10),
-        BackgroundTransparency = active and 0.3 or 0.7
-    })
-    pulseTween:Play()
-    
-    local btnTween = TweenService:Create(toggleBtn, tweenInfo, {
-        BackgroundTransparency = active and 0.25 or 0.15
-    })
-    btnTween:Play()
-end
-
-local function startFlight()
-    if not getCharacter() then
-        warn("Não foi possível obter o personagem!")
-        return
+    local function updateSlider(input)
+        local relativeX = math.clamp((input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+        local value = minValue + (maxValue - minValue) * relativeX
+        value = math.round(value / 1) * 1
+        value = math.clamp(value, minValue, maxValue)
+        
+        fill.Size = UDim2.new(relativeX, 0, 1, 0)
+        btn.Position = UDim2.new(relativeX, -8, 0.5, -8)
+        label.Text = labelText .. ": " .. tostring(value)
+        
+        return value
     end
     
-    -- Verificar se está em um veículo
-    if isPlayerInVehicle() then
-        warn("Você está em um veículo! Saia do veículo para voar.")
-        return
-    end
-    
-    -- Criar BodyVelocity
-    bodyVelocity = Instance.new("BodyVelocity")
-    bodyVelocity.MaxForce = Vector3.new(100000, 100000, 100000)
-    bodyVelocity.Velocity = Vector3.new(0, 0, 0)
-    bodyVelocity.Parent = rootPart
-    
-    -- Desabilitar gravidade
-    humanoid.PlatformStand = true
-    
-    updateFlightStatus(true)
-end
-
-local function stopFlight()
-    if bodyVelocity then
-        bodyVelocity:Destroy()
-        bodyVelocity = nil
-    end
-    
-    if humanoid then
-        humanoid.PlatformStand = false
-    end
-    
-    updateFlightStatus(false)
-end
-
-local function updateFlight()
-    if not config.isFlying or not bodyVelocity or not character or not rootPart then
-        return
-    end
-    
-    -- Verificar se o personagem ainda existe
-    if not character.Parent then
-        stopFlight()
-        return
-    end
-    
-    -- Verificar se está em um veículo
-    if isPlayerInVehicle() then
-        stopFlight()
-        warn("Voo desativado: você entrou em um veículo!")
-        return
-    end
-    
-    local moveDirection = Vector3.new(0, 0, 0)
-    local camera = workspace.CurrentCamera
-    if not camera then return end
-    
-    local cameraCFrame = camera.CFrame
-    
-    -- Calcular direção
-    local forward = cameraCFrame.LookVector
-    local right = cameraCFrame.RightVector
-    
-    -- Manter apenas componentes horizontais
-    forward = Vector3.new(forward.X, 0, forward.Z).Unit
-    right = Vector3.new(right.X, 0, right.Z).Unit
-    
-    if keys.W then
-        moveDirection = moveDirection + forward
-    end
-    if keys.S then
-        moveDirection = moveDirection - forward
-    end
-    if keys.A then
-        moveDirection = moveDirection - right
-    end
-    if keys.D then
-        moveDirection = moveDirection + right
-    end
-    
-    -- Normalizar direção horizontal
-    if moveDirection.Magnitude > 0 then
-        moveDirection = moveDirection.Unit * config.FlightSpeed
-    end
-    
-    -- Adicionar vertical
-    if keys.Space then
-        moveDirection = moveDirection + Vector3.new(0, config.FlightSpeed, 0)
-    end
-    if keys.Shift then
-        moveDirection = moveDirection - Vector3.new(0, config.FlightSpeed, 0)
-    end
-    
-    bodyVelocity.Velocity = moveDirection
-end
-
--- ============================================
--- EVENTOS E INTERAÇÕES
--- ============================================
-
--- Toggle do voo
-toggleBtn.MouseButton1Click:Connect(function()
-    if config.isFlying then
-        stopFlight()
-    else
-        startFlight()
-    end
-end)
-
--- Slider de velocidade
-local function updateSlider(input)
-    local relativeX = math.clamp((input.Position.X - sliderTrack.AbsolutePosition.X) / sliderTrack.AbsoluteSize.X, 0, 1)
-    local newSpeed = config.MinSpeed + (config.MaxSpeed - config.MinSpeed) * relativeX
-    config.FlightSpeed = math.round(newSpeed / 5) * 5
-    config.FlightSpeed = math.clamp(config.FlightSpeed, config.MinSpeed, config.MaxSpeed)
-    
-    sliderFill.Size = UDim2.new(relativeX, 0, 1, 0)
-    sliderBtn.Position = UDim2.new(relativeX, -12, 0.5, -12)
-    speedLabel.Text = "⚡ Velocidade: " .. tostring(config.FlightSpeed)
-end
-
-sliderBtn.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        updateSlider(input)
-        local connection
-        connection = UserInputService.InputChanged:Connect(function(inputChanged)
-            if inputChanged.UserInputType == Enum.UserInputType.MouseMovement then
-                updateSlider(inputChanged)
-            end
-        end)
-        UserInputService.InputEnded:Connect(function(inputEnded)
-            if inputEnded.UserInputType == Enum.UserInputType.MouseButton1 then
-                if connection then
-                    connection:Disconnect()
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            local value = updateSlider(input)
+            local connection
+            connection = UserInputService.InputChanged:Connect(function(inputChanged)
+                if inputChanged.UserInputType == Enum.UserInputType.MouseMovement then
+                    value = updateSlider(inputChanged)
                 end
-            end
-        end)
-    end
-end)
-
--- Teclas
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if not config.isFlying then return end
+            end)
+            UserInputService.InputEnded:Connect(function(inputEnded)
+                if inputEnded.UserInputType == Enum.UserInputType.MouseButton1 then
+                    if connection then connection:Disconnect() end
+                end
+            end)
+        end
+    end)
     
-    local key = input.KeyCode
-    if key == Enum.KeyCode.W then keys.W = true
-    elseif key == Enum.KeyCode.A then keys.A = true
-    elseif key == Enum.KeyCode.S then keys.S = true
-    elseif key == Enum.KeyCode.D then keys.D = true
-    elseif key == Enum.KeyCode.Space then 
-        keys.Space = true
-    elseif key == Enum.KeyCode.LeftShift then keys.Shift = true
-    end
-end)
+    return {
+        Container = container,
+        Label = label,
+        Track = track,
+        Fill = fill,
+        Button = btn,
+        GetValue = function()
+            local relX = fill.Size.X.Scale
+            return minValue + (maxValue - minValue) * relX
+        end
+    }
+end
 
-UserInputService.InputEnded:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
+-- ============================================
+-- FUNÇÕES DE CONTROLE
+-- ============================================
+
+local function setModeTrial(active)
+    config.Enabled = active
     
-    local key = input.KeyCode
-    if key == Enum.KeyCode.W then keys.W = false
-    elseif key == Enum.KeyCode.A then keys.A = false
-    elseif key == Enum.KeyCode.S then keys.S = false
-    elseif key == Enum.KeyCode.D then keys.D = false
-    elseif key == Enum.KeyCode.Space then keys.Space = false
-    elseif key == Enum.KeyCode.LeftShift then keys.Shift = false
-    end
-end)
-
--- Loop de voo
-RunService.Heartbeat:Connect(function()
-    if config.isFlying then
-        updateFlight()
-    end
-end)
-
--- Minimizar/Restaurar
-minimizeBtn.MouseButton1Click:Connect(function()
-    config.isMinimized = not config.isMinimized
-    local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    
-    if config.isMinimized then
-        local tween = TweenService:Create(mainFrame, tweenInfo, {
-            Size = UDim2.new(0, 380, 0, 60)
-        })
-        tween:Play()
-        content.Visible = false
-        minimizeBtn.Image = "rbxassetid://5076896581"
+    if active then
+        mainToggle.Text = "🟢 MODO TRIAL ATIVADO"
+        mainToggle.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+        mainToggle.BackgroundTransparency = 0.1
+        isAiming = aimbotToggle.Text == "ON"
+        killAuraEnabled = killToggle.Text == "ON"
+        
+        if killAuraEnabled and not killAuraThread then
+            killAuraThread = task.spawn(killAura)
+        end
+        
+        if isAiming and not aimbotThread then
+            aimbotThread = task.spawn(aimbotLoop)
+        end
+        
+        statusBar.Text = "🎯 MODO TRIAL ATIVADO - Buscando alvos..."
+        statusBar.TextColor3 = Color3.fromRGB(100, 255, 100)
     else
-        local tween = TweenService:Create(mainFrame, tweenInfo, {
-            Size = UDim2.new(0, 380, 0, 500)
-        })
-        tween:Play()
-        content.Visible = true
-        minimizeBtn.Image = "rbxassetid://5076896579"
+        mainToggle.Text = "🔴 MODO TRIAL DESATIVADO"
+        mainToggle.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        mainToggle.BackgroundTransparency = 0.2
+        isAiming = false
+        killAuraEnabled = false
+        currentTarget = nil
+        
+        if killAuraThread then
+            task.cancel(killAuraThread)
+            killAuraThread = nil
+        end
+        
+        if aimbotThread then
+            task.cancel(aimbotThread)
+            aimbotThread = nil
+        end
+        
+        statusBar.Text = "🎯 Modo Trial desativado"
+        statusBar.TextColor3 = Color3.fromRGB(200, 200, 200)
+    end
+end
+
+local aimbotThread = nil
+
+-- ============================================
+-- EVENTOS DA INTERFACE
+-- ============================================
+
+mainToggle.MouseButton1Click:Connect(function()
+    setModeTrial(not config.Enabled)
+end)
+
+aimbotToggle.MouseButton1Click:Connect(function()
+    local isOn = aimbotToggle.Text == "ON"
+    aimbotToggle.Text = isOn and "OFF" or "ON"
+    aimbotToggle.BackgroundColor3 = isOn and Color3.fromRGB(200, 50, 50) or Color3.fromRGB(50, 200, 50)
+    
+    if config.Enabled then
+        isAiming = aimbotToggle.Text == "ON"
+        if isAiming and not aimbotThread then
+            aimbotThread = task.spawn(aimbotLoop)
+        elseif not isAiming and aimbotThread then
+            task.cancel(aimbotThread)
+            aimbotThread = nil
+        end
     end
 end)
 
--- Fechar
+killToggle.MouseButton1Click:Connect(function()
+    local isOn = killToggle.Text == "ON"
+    killToggle.Text = isOn and "OFF" or "ON"
+    killToggle.BackgroundColor3 = isOn and Color3.fromRGB(200, 50, 50) or Color3.fromRGB(50, 200, 50)
+    
+    if config.Enabled then
+        killAuraEnabled = killToggle.Text == "ON"
+        if killAuraEnabled and not killAuraThread then
+            killAuraThread = task.spawn(killAura)
+        elseif not killAuraEnabled and killAuraThread then
+            task.cancel(killAuraThread)
+            killAuraThread = nil
+        end
+    end
+end)
+
+-- Botões do header
+minimizeBtn.MouseButton1Click:Connect(function()
+    content.Visible = not content.Visible
+    mainFrame.Size = content.Visible and UDim2.new(0, 350, 0, 450) or UDim2.new(0, 350, 0, 50)
+end)
+
 closeBtn.MouseButton1Click:Connect(function()
-    if config.isFlying then
-        stopFlight()
+    if config.Enabled then
+        setModeTrial(false)
     end
     screenGui:Destroy()
 end)
 
--- Drag and drop
+-- ============================================
+-- DRAG AND DROP
+-- ============================================
+
 local dragging = false
-local dragInput = nil
 local dragStart = nil
 local startPos = nil
 
@@ -781,23 +710,11 @@ header.InputBegan:Connect(function(input)
         dragging = true
         dragStart = input.Position
         startPos = mainFrame.Position
-        
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
-        end)
     end
 end)
 
 header.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement then
-        dragInput = input
-    end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
+    if input.UserInputType == Enum.UserInputType.MouseMovement and dragging then
         local delta = input.Position - dragStart
         mainFrame.Position = UDim2.new(
             startPos.X.Scale,
@@ -808,59 +725,27 @@ UserInputService.InputChanged:Connect(function(input)
     end
 end)
 
--- Efeitos de hover
-local function addHoverEffect(btn)
-    btn.MouseEnter:Connect(function()
-        local tween = TweenService:Create(btn, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
-            BackgroundTransparency = 0.1,
-            Size = btn == toggleBtn and UDim2.new(0.92, 0, 0, 57) or btn.Size
-        })
-        tween:Play()
-    end)
-    btn.MouseLeave:Connect(function()
-        local tween = TweenService:Create(btn, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
-            BackgroundTransparency = btn == toggleBtn and 0.15 or 0.3,
-            Size = btn == toggleBtn and UDim2.new(0.9, 0, 0, 55) or btn.Size
-        })
-        tween:Play()
-    end)
-end
-
-addHoverEffect(toggleBtn)
-addHoverEffect(minimizeBtn)
-addHoverEffect(closeBtn)
-
--- Animação de entrada
-local entryTween = TweenService:Create(mainFrame, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-    Position = UDim2.new(0.5, -190, 0.5, -250),
-    BackgroundTransparency = 0.25
-})
-entryTween:Play()
-
--- ============================================
--- EVENTOS DE PERSONAGEM (UNIVERSAL)
--- ============================================
-
--- Monitorar mudanças de personagem
-player.CharacterAdded:Connect(function(newChar)
-    character = newChar
-    humanoid = safeWaitForChild(character, "Humanoid")
-    rootPart = safeWaitForChild(character, "HumanoidRootPart")
-    
-    if config.isFlying then
-        -- Reiniciar voo se já estava ativo
-        task.wait(0.5) -- Aguardar personagem carregar
-        if config.isFlying then
-            stopFlight()
-            startFlight()
-        end
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
     end
 end)
 
--- Monitorar remoção do personagem
-player.CharacterRemoving:Connect(function()
-    if config.isFlying then
-        stopFlight()
+-- ============================================
+-- MONITORAMENTO DE ALVOS
+-- ============================================
+
+RunService.Heartbeat:Connect(function()
+    if config.Enabled and isAiming then
+        if currentTarget then
+            local targetName = currentTarget.Player and currentTarget.Player.Name or "Desconhecido"
+            local dist = currentTarget.Distance and math.round(currentTarget.Distance) or 0
+            statusBar.Text = "🎯 Alvo: " .. targetName .. " | Distância: " .. dist .. "m"
+            statusBar.TextColor3 = Color3.fromRGB(100, 255, 100)
+        else
+            statusBar.Text = "🎯 Nenhum alvo encontrado"
+            statusBar.TextColor3 = Color3.fromRGB(255, 200, 100)
+        end
     end
 end)
 
@@ -868,22 +753,13 @@ end)
 -- INICIALIZAÇÃO
 -- ============================================
 
-updateFlightStatus(false)
+-- Ativar automaticamente se configurado
+if config.AutoToggle then
+    task.wait(0.5)
+    setModeTrial(true)
+end
 
--- ============================================
--- LIMPEZA DE RECURSOS
--- ============================================
-
-game:BindToClose(function()
-    if config.isFlying then
-        stopFlight()
-    end
-    if blurEffect then
-        blurEffect:Destroy()
-    end
-end)
-
-print("✈️ Flight System Universal carregado com sucesso!")
-print("✅ Funciona em qualquer jogo Roblox!")
+print("🎯 Aimbot + KillAura Universal carregado com sucesso!")
+print("✅ Modo Trial ativado automaticamente!")
 
 return true
