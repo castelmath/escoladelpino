@@ -1,16 +1,22 @@
 --[[
-    Sistema de Voo Premium - Estilo Ikat Loader
-    Interface moderna com animações suaves e design elegante
+    Sistema de Voo Premium - Universal
+    Funciona em qualquer jogo Roblox
+    Carregue com: loadstring(game:HttpGet("https://raw.githubusercontent.com/castelmath/escoladelpino/refs/heads/main/fly"))()
 ]]
+
+-- ============================================
+-- CONFIGURAÇÕES INICIAIS
+-- ============================================
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
+local StarterGui = game:GetService("StarterGui")
 
 local player = Players.LocalPlayer
-local character = player.CharacterAdded:Wait()
+local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
 local rootPart = character:WaitForChild("HumanoidRootPart")
 
@@ -24,7 +30,8 @@ local config = {
     MaxSpeed = 150,
     SpeedIncrement = 5,
     isFlying = false,
-    isMinimized = false
+    isMinimized = false,
+    UIEnabled = true
 }
 
 -- ============================================
@@ -40,12 +47,54 @@ local keys = {
     Shift = false
 }
 
-local flyConnection = nil
 local bodyVelocity = nil
+local isInVehicle = false
+local currentVehicle = nil
+
+-- ============================================
+-- FUNÇÕES DE UTILIDADE
+-- ============================================
+
+local function safeWaitForChild(parent, name, timeout)
+    timeout = timeout or 5
+    local start = tick()
+    while tick() - start < timeout do
+        local child = parent:FindFirstChild(name)
+        if child then return child end
+        task.wait(0.1)
+    end
+    return nil
+end
+
+local function getCharacter()
+    character = player.Character or player.CharacterAdded:Wait()
+    if not character then return false end
+    
+    humanoid = safeWaitForChild(character, "Humanoid")
+    rootPart = safeWaitForChild(character, "HumanoidRootPart")
+    
+    if not humanoid or not rootPart then
+        return false
+    end
+    
+    return true
+end
+
+local function isPlayerInVehicle()
+    if not character then return false end
+    local seat = character:FindFirstChild("SeatPart") or character:FindFirstChildOfClass("VehicleSeat")
+    return seat ~= nil
+end
 
 -- ============================================
 -- CRIAÇÃO DA INTERFACE (ESTILO IKAT)
 -- ============================================
+
+-- Verificar se já existe uma UI
+local existingUI = player.PlayerGui:FindFirstChild("FlightUI")
+if existingUI then
+    existingUI:Destroy()
+end
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "FlightUI"
@@ -53,10 +102,7 @@ screenGui.Parent = player.PlayerGui
 screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
--- ============================================
--- FUNÇÕES DE ESTILO IKAT
--- ============================================
-
+-- Efeito de blur
 local function createBlurEffect()
     local blur = Instance.new("BlurEffect")
     blur.Size = 0
@@ -65,14 +111,6 @@ local function createBlurEffect()
 end
 
 local blurEffect = createBlurEffect()
-
--- Efeito de vidro (Glassmorphism)
-local function applyGlassStyle(frame)
-    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-    frame.BackgroundTransparency = 0.15
-    frame.BorderSizePixel = 0
-    frame.ClipsDescendants = true
-end
 
 -- ============================================
 -- CONTAINER PRINCIPAL
@@ -108,7 +146,7 @@ local borderCorner = Instance.new("UICorner")
 borderCorner.CornerRadius = UDim.new(0, 20)
 borderCorner.Parent = mainFrame
 
--- Sombra principal
+-- Sombra
 local shadow = Instance.new("ImageLabel")
 shadow.Name = "Shadow"
 shadow.Size = UDim2.new(1, 40, 1, 40)
@@ -122,7 +160,7 @@ shadow.SliceCenter = Rect.new(10, 10, 10, 10)
 shadow.Parent = mainFrame
 
 -- ============================================
--- HEADER (BARRA DE TÍTULO)
+-- HEADER
 -- ============================================
 
 local header = Instance.new("Frame")
@@ -137,7 +175,7 @@ local headerCorner = Instance.new("UICorner")
 headerCorner.CornerRadius = UDim.new(0, 20)
 headerCorner.Parent = header
 
--- Ícone do header
+-- Ícone
 local headerIcon = Instance.new("ImageLabel")
 headerIcon.Name = "HeaderIcon"
 headerIcon.Size = UDim2.new(0, 30, 0, 30)
@@ -166,7 +204,7 @@ subtitle.Name = "Subtitle"
 subtitle.Size = UDim2.new(0.6, 0, 0.5, 0)
 subtitle.Position = UDim2.new(0, 55, 0.5, 0)
 subtitle.BackgroundTransparency = 1
-subtitle.Text = "Premium Flight Controller"
+subtitle.Text = "Universal Flight Controller"
 subtitle.TextColor3 = Color3.fromRGB(150, 150, 200)
 subtitle.TextSize = 12
 subtitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -204,7 +242,7 @@ closeCorner.CornerRadius = UDim.new(1, 0)
 closeCorner.Parent = closeBtn
 
 -- ============================================
--- CONTEÚDO PRINCIPAL
+-- CONTEÚDO
 -- ============================================
 
 local content = Instance.new("Frame")
@@ -215,7 +253,7 @@ content.BackgroundTransparency = 1
 content.Parent = mainFrame
 
 -- ============================================
--- STATUS DO VOO
+-- STATUS
 -- ============================================
 
 local statusContainer = Instance.new("Frame")
@@ -232,7 +270,7 @@ local statusCorner = Instance.new("UICorner")
 statusCorner.CornerRadius = UDim.new(0, 14)
 statusCorner.Parent = statusContainer
 
--- Efeito de brilho no status
+-- Brilho do status
 local statusGlow = Instance.new("Frame")
 statusGlow.Name = "StatusGlow"
 statusGlow.Size = UDim2.new(0.8, 0, 0.8, 0)
@@ -246,7 +284,7 @@ local glowCorner = Instance.new("UICorner")
 glowCorner.CornerRadius = UDim.new(1, 0)
 glowCorner.Parent = statusGlow
 
--- Indicador de status (círculo animado)
+-- Indicador
 local statusIndicator = Instance.new("Frame")
 statusIndicator.Name = "StatusIndicator"
 statusIndicator.Size = UDim2.new(0, 18, 0, 18)
@@ -261,7 +299,7 @@ local indicatorCorner = Instance.new("UICorner")
 indicatorCorner.CornerRadius = UDim.new(1, 0)
 indicatorCorner.Parent = statusIndicator
 
--- Pulso do indicador
+-- Pulso
 local pulse = Instance.new("Frame")
 pulse.Name = "Pulse"
 pulse.Size = UDim2.new(1, 10, 1, 10)
@@ -276,7 +314,7 @@ local pulseCorner = Instance.new("UICorner")
 pulseCorner.CornerRadius = UDim.new(1, 0)
 pulseCorner.Parent = pulse
 
--- Texto de status
+-- Texto status
 local statusText = Instance.new("TextLabel")
 statusText.Name = "StatusText"
 statusText.Size = UDim2.new(0.7, 0, 1, 0)
@@ -289,7 +327,7 @@ statusText.TextXAlignment = Enum.TextXAlignment.Left
 statusText.Font = Enum.Font.GothamBold
 statusText.Parent = statusContainer
 
--- Status secundário
+-- Subtítulo status
 local statusSub = Instance.new("TextLabel")
 statusSub.Name = "StatusSub"
 statusSub.Size = UDim2.new(0.7, 0, 0.5, 0)
@@ -303,7 +341,7 @@ statusSub.Font = Enum.Font.Gotham
 statusSub.Parent = statusContainer
 
 -- ============================================
--- BOTÃO TOGGLE DO VOO
+-- BOTÃO TOGGLE
 -- ============================================
 
 local toggleBtn = Instance.new("TextButton")
@@ -324,20 +362,6 @@ local toggleCorner = Instance.new("UICorner")
 toggleCorner.CornerRadius = UDim.new(0, 14)
 toggleCorner.Parent = toggleBtn
 
--- Efeito de hover do botão
-local toggleHover = Instance.new("Frame")
-toggleHover.Name = "Hover"
-toggleHover.Size = UDim2.new(1, 0, 1, 0)
-toggleHover.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-toggleHover.BackgroundTransparency = 0.9
-toggleHover.BorderSizePixel = 0
-toggleHover.Visible = false
-toggleHover.Parent = toggleBtn
-
-local hoverCorner = Instance.new("UICorner")
-hoverCorner.CornerRadius = UDim.new(0, 14)
-hoverCorner.Parent = toggleHover
-
 -- ============================================
 -- CONTROLE DE VELOCIDADE
 -- ============================================
@@ -349,7 +373,7 @@ speedContainer.Position = UDim2.new(0.05, 0, 0.35, 0)
 speedContainer.BackgroundTransparency = 1
 speedContainer.Parent = content
 
--- Label da velocidade
+-- Label velocidade
 local speedLabel = Instance.new("TextLabel")
 speedLabel.Name = "SpeedLabel"
 speedLabel.Size = UDim2.new(1, 0, 0, 30)
@@ -362,7 +386,7 @@ speedLabel.Font = Enum.Font.GothamBold
 speedLabel.TextXAlignment = Enum.TextXAlignment.Left
 speedLabel.Parent = speedContainer
 
--- Container do slider
+-- Container slider
 local sliderContainer = Instance.new("Frame")
 sliderContainer.Name = "SliderContainer"
 sliderContainer.Size = UDim2.new(1, 0, 0, 45)
@@ -377,7 +401,7 @@ local sliderCorner = Instance.new("UICorner")
 sliderCorner.CornerRadius = UDim.new(1, 0)
 sliderCorner.Parent = sliderContainer
 
--- Track do slider
+-- Track
 local sliderTrack = Instance.new("Frame")
 sliderTrack.Name = "SliderTrack"
 sliderTrack.Size = UDim2.new(0.95, 0, 0.25, 0)
@@ -392,7 +416,7 @@ local trackCorner = Instance.new("UICorner")
 trackCorner.CornerRadius = UDim.new(1, 0)
 trackCorner.Parent = sliderTrack
 
--- Fill do slider
+-- Fill
 local sliderFill = Instance.new("Frame")
 sliderFill.Name = "SliderFill"
 sliderFill.Size = UDim2.new(0.5, 0, 1, 0)
@@ -406,7 +430,7 @@ local fillCorner = Instance.new("UICorner")
 fillCorner.CornerRadius = UDim.new(1, 0)
 fillCorner.Parent = sliderFill
 
--- Gradiente do fill
+-- Gradiente
 local fillGradient = Instance.new("UIGradient")
 fillGradient.Color = ColorSequence.new({
     ColorSequenceKeypoint.new(0, Color3.fromRGB(100, 50, 255)),
@@ -414,7 +438,7 @@ fillGradient.Color = ColorSequence.new({
 })
 fillGradient.Parent = sliderFill
 
--- Botão do slider
+-- Botão slider
 local sliderBtn = Instance.new("ImageButton")
 sliderBtn.Name = "SliderBtn"
 sliderBtn.Size = UDim2.new(0, 24, 0, 24)
@@ -429,7 +453,7 @@ local btnCorner = Instance.new("UICorner")
 btnCorner.CornerRadius = UDim.new(1, 0)
 btnCorner.Parent = sliderBtn
 
--- Valores mínimo e máximo
+-- Labels min/max
 local minLabel = Instance.new("TextLabel")
 minLabel.Name = "MinLabel"
 minLabel.Size = UDim2.new(0, 30, 0, 20)
@@ -470,7 +494,7 @@ local controlsCorner = Instance.new("UICorner")
 controlsCorner.CornerRadius = UDim.new(0, 12)
 controlsCorner.Parent = controlsContainer
 
--- Ícones de controle
+-- Botões de controle
 local controls = {
     {Key = "W", Label = "↑"},
     {Key = "A", Label = "←"},
@@ -513,7 +537,7 @@ local function updateFlightStatus(active)
     local btnText = active and "🛬 DESATIVAR VOO" or "🚀 ATIVAR VOO"
     local btnColor = active and Color3.fromRGB(200, 50, 50) or Color3.fromRGB(80, 50, 200)
     
-    -- Atualizar interface
+    -- Atualizar UI
     statusIndicator.BackgroundColor3 = statusColor
     statusIndicator.BackgroundTransparency = 0.2
     pulse.BackgroundColor3 = statusColor
@@ -524,7 +548,7 @@ local function updateFlightStatus(active)
     toggleBtn.BackgroundColor3 = btnColor
     toggleBtn.BackgroundTransparency = 0.15
     
-    -- Animação do indicador
+    -- Animações
     local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     local pulseTween = TweenService:Create(pulse, tweenInfo, {
         Size = active and UDim2.new(2, 20, 2, 20) or UDim2.new(1, 10, 1, 10),
@@ -532,7 +556,6 @@ local function updateFlightStatus(active)
     })
     pulseTween:Play()
     
-    -- Animação do botão
     local btnTween = TweenService:Create(toggleBtn, tweenInfo, {
         BackgroundTransparency = active and 0.25 or 0.15
     })
@@ -540,11 +563,15 @@ local function updateFlightStatus(active)
 end
 
 local function startFlight()
-    if not character or not humanoid or not rootPart then
-        character = player.Character
-        if not character then return end
-        humanoid = character:WaitForChild("Humanoid")
-        rootPart = character:WaitForChild("HumanoidRootPart")
+    if not getCharacter() then
+        warn("Não foi possível obter o personagem!")
+        return
+    end
+    
+    -- Verificar se está em um veículo
+    if isPlayerInVehicle() then
+        warn("Você está em um veículo! Saia do veículo para voar.")
+        return
     end
     
     -- Criar BodyVelocity
@@ -577,11 +604,26 @@ local function updateFlight()
         return
     end
     
+    -- Verificar se o personagem ainda existe
+    if not character.Parent then
+        stopFlight()
+        return
+    end
+    
+    -- Verificar se está em um veículo
+    if isPlayerInVehicle() then
+        stopFlight()
+        warn("Voo desativado: você entrou em um veículo!")
+        return
+    end
+    
     local moveDirection = Vector3.new(0, 0, 0)
     local camera = workspace.CurrentCamera
+    if not camera then return end
+    
     local cameraCFrame = camera.CFrame
     
-    -- Calcular direção baseada nas teclas
+    -- Calcular direção
     local forward = cameraCFrame.LookVector
     local right = cameraCFrame.RightVector
     
@@ -607,7 +649,7 @@ local function updateFlight()
         moveDirection = moveDirection.Unit * config.FlightSpeed
     end
     
-    -- Adicionar vertical (espaço e shift)
+    -- Adicionar vertical
     if keys.Space then
         moveDirection = moveDirection + Vector3.new(0, config.FlightSpeed, 0)
     end
@@ -638,7 +680,6 @@ local function updateSlider(input)
     config.FlightSpeed = math.round(newSpeed / 5) * 5
     config.FlightSpeed = math.clamp(config.FlightSpeed, config.MinSpeed, config.MaxSpeed)
     
-    -- Atualizar UI
     sliderFill.Size = UDim2.new(relativeX, 0, 1, 0)
     sliderBtn.Position = UDim2.new(relativeX, -12, 0.5, -12)
     speedLabel.Text = "⚡ Velocidade: " .. tostring(config.FlightSpeed)
@@ -666,18 +707,22 @@ end)
 -- Teclas
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
+    if not config.isFlying then return end
+    
     local key = input.KeyCode
     if key == Enum.KeyCode.W then keys.W = true
     elseif key == Enum.KeyCode.A then keys.A = true
     elseif key == Enum.KeyCode.S then keys.S = true
     elseif key == Enum.KeyCode.D then keys.D = true
-    elseif key == Enum.KeyCode.Space then keys.Space = true
+    elseif key == Enum.KeyCode.Space then 
+        keys.Space = true
     elseif key == Enum.KeyCode.LeftShift then keys.Shift = true
     end
 end)
 
 UserInputService.InputEnded:Connect(function(input, gameProcessed)
     if gameProcessed then return end
+    
     local key = input.KeyCode
     if key == Enum.KeyCode.W then keys.W = false
     elseif key == Enum.KeyCode.A then keys.A = false
@@ -792,22 +837,38 @@ local entryTween = TweenService:Create(mainFrame, TweenInfo.new(0.5, Enum.Easing
 })
 entryTween:Play()
 
--- Inicializar
-updateFlightStatus(false)
+-- ============================================
+-- EVENTOS DE PERSONAGEM (UNIVERSAL)
+-- ============================================
 
--- Reset no respawn
+-- Monitorar mudanças de personagem
 player.CharacterAdded:Connect(function(newChar)
     character = newChar
-    humanoid = character:WaitForChild("Humanoid")
-    rootPart = character:WaitForChild("HumanoidRootPart")
+    humanoid = safeWaitForChild(character, "Humanoid")
+    rootPart = safeWaitForChild(character, "HumanoidRootPart")
     
     if config.isFlying then
-        stopFlight()
-        startFlight()
+        -- Reiniciar voo se já estava ativo
+        task.wait(0.5) -- Aguardar personagem carregar
+        if config.isFlying then
+            stopFlight()
+            startFlight()
+        end
     end
 end)
 
-print("✈️ Flight System carregado com sucesso!")
+-- Monitorar remoção do personagem
+player.CharacterRemoving:Connect(function()
+    if config.isFlying then
+        stopFlight()
+    end
+end)
+
+-- ============================================
+-- INICIALIZAÇÃO
+-- ============================================
+
+updateFlightStatus(false)
 
 -- ============================================
 -- LIMPEZA DE RECURSOS
@@ -821,3 +882,8 @@ game:BindToClose(function()
         blurEffect:Destroy()
     end
 end)
+
+print("✈️ Flight System Universal carregado com sucesso!")
+print("✅ Funciona em qualquer jogo Roblox!")
+
+return true
